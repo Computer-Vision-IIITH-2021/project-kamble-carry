@@ -41,6 +41,16 @@ def getlaplacian1(i_arr, consts, epsilon=1e-5, win_rad=1):
             vals[l: neb_size ** 2 + l] = tvals.ravel(order='F')
             l += neb_size ** 2
 
+    vals = vals.ravel(order='F')[0: l]
+    row_inds = row_inds.ravel(order='F')[0: l]
+    col_inds = col_inds.ravel(order='F')[0: l]
+    a_sparse = sps.csr_matrix((vals, (row_inds, col_inds)), shape=(img_size, img_size))
+
+    sum_a = a_sparse.sum(axis=1).T.tolist()[0]
+    a_sparse = sps.diags([sum_a], [0], shape=(img_size, img_size)) - a_sparse
+
+    return a_sparse
+
 def getLaplacian(img):
     h, w, _ = img.shape
     coo = getlaplacian1(img, np.zeros(shape=(h, w)), 1e-5, 1).tocoo()
