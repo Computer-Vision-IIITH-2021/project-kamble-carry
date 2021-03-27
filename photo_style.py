@@ -2,19 +2,15 @@ from __future__ import division, print_function
 
 import numpy as np
 import tensorflow as tf
-from vgg19.vgg import Vgg19
+from vgg import Vgg19
 from PIL import Image
 import time
-from closed_form_matting import getLaplacian
+from closedformmatting import getLaplacian
 import math
 from functools import partial
 import copy
 import os
-
-try:
-    xrange          # Python 2
-except NameError:
-    xrange = range  # Python 3
+import tensorflow_probability as tfp
 
 VGG_MEAN = [103.939, 116.779, 123.68]
 
@@ -81,23 +77,23 @@ def load_seg(content_seg_path, style_seg_path, content_shape, style_shape):
 
     color_content_masks = []
     color_style_masks = []
-    for i in xrange(len(color_codes)):
+    for i in range(len(color_codes)):
         color_content_masks.append(tf.expand_dims(tf.expand_dims(tf.constant(_extract_mask(content_seg, color_codes[i])), 0), -1))
         color_style_masks.append(tf.expand_dims(tf.expand_dims(tf.constant(_extract_mask(style_seg, color_codes[i])), 0), -1))
 
     return color_content_masks, color_style_masks
 
 def gram_matrix(activations):
-    height = tf.shape(activations)[1]
-    width = tf.shape(activations)[2]
-    num_channels = tf.shape(activations)[3]
-    gram_matrix = tf.transpose(activations, [0, 3, 1, 2])
+    height = tf.shape(input=activations)[1]
+    width = tf.shape(input=activations)[2]
+    num_channels = tf.shape(input=activations)[3]
+    gram_matrix = tf.transpose(a=activations, perm=[0, 3, 1, 2])
     gram_matrix = tf.reshape(gram_matrix, [num_channels, width * height])
     gram_matrix = tf.matmul(gram_matrix, gram_matrix, transpose_b=True)
     return gram_matrix
 
 def content_loss(const_layer, var_layer, weight):
-    return tf.reduce_mean(tf.squared_difference(const_layer, var_layer)) * weight
+    return tf.reduce_mean(input_tensor=tf.math.squared_difference(const_layer, var_layer)) * weight
 
 def style_loss(CNN_structure, const_layers, var_layers, content_segs, style_segs, weight):
     loss_styles = []
@@ -114,16 +110,16 @@ def style_loss(CNN_structure, const_layers, var_layers, content_segs, style_segs
             content_seg_width, content_seg_height = int(math.ceil(content_seg_width / 2)), int(math.ceil(content_seg_height / 2))
             style_seg_width, style_seg_height = int(math.ceil(style_seg_width / 2)), int(math.ceil(style_seg_height / 2))
 
-            for i in xrange(len(content_segs)):
-                content_segs[i] = tf.image.resize_bilinear(content_segs[i], tf.constant((content_seg_height, content_seg_width)))
-                style_segs[i] = tf.image.resize_bilinear(style_segs[i], tf.constant((style_seg_height, style_seg_width)))
+            for i in range(len(content_segs)):
+                content_segs[i] = tf.image.resize(content_segs[i], tf.constant((content_seg_height, content_seg_width)), method=tf.image.ResizeMethod.BILINEAR)
+                style_segs[i] = tf.image.resize(style_segs[i], tf.constant((style_seg_height, style_seg_width)), method=tf.image.ResizeMethod.BILINEAR)
 
         elif "conv" in layer_name:
-            for i in xrange(len(content_segs)):
+            for i in range(len(content_segs)):
                 # have some differences on border with torch
-                content_segs[i] = tf.nn.avg_pool(tf.pad(content_segs[i], [[0, 0], [1, 1], [1, 1], [0, 0]], "CONSTANT"), \
+                content_segs[i] = tf.nn.avg_pool2d(input=tf.pad(tensor=content_segs[i], paddings=[[0, 0], [1, 1], [1, 1], [0, 0]], mode="CONSTANT"), \
                 ksize=[1, 3, 3, 1], strides=[1, 1, 1, 1], padding='VALID')
-                style_segs[i] = tf.nn.avg_pool(tf.pad(style_segs[i], [[0, 0], [1, 1], [1, 1], [0, 0]], "CONSTANT"), \
+                style_segs[i] = tf.nn.avg_pool2d(input=tf.pad(tensor=style_segs[i], paddings=[[0, 0], [1, 1], [1, 1], [0, 0]], mode="CONSTANT"), \
                 ksize=[1, 3, 3, 1], strides=[1, 1, 1, 1], padding='VALID')
 
         if layer_name == var_layers[layer_index].name[var_layers[layer_index].name.find("/") + 1:]:
@@ -136,20 +132,20 @@ def style_loss(CNN_structure, const_layers, var_layers, content_segs, style_segs
             layer_style_loss = 0.0
             for content_seg, style_seg in zip(content_segs, style_segs):
                 gram_matrix_const = gram_matrix(tf.multiply(const_layer, style_seg))
-                style_mask_mean   = tf.reduce_mean(style_seg)
-                gram_matrix_const = tf.cond(tf.greater(style_mask_mean, 0.),
-                                        lambda: gram_matrix_const / (tf.to_float(tf.size(const_layer)) * style_mask_mean),
-                                        lambda: gram_matrix_const
+                style_mask_mean   = tf.reduce_mean(input_tensor=style_seg)
+                gram_matrix_const = tf.cond(pred=tf.greater(style_mask_mean, 0.),
+                                        true_fn=lambda: gram_matrix_const / (tf.cast(tf.size(input=const_layer), dtype=tf.float32) * style_mask_mean),
+                                        false_fn=lambda: gram_matrix_const
                                     )
 
                 gram_matrix_var   = gram_matrix(tf.multiply(var_layer, content_seg))
-                content_mask_mean = tf.reduce_mean(content_seg)
-                gram_matrix_var   = tf.cond(tf.greater(content_mask_mean, 0.),
-                                        lambda: gram_matrix_var / (tf.to_float(tf.size(var_layer)) * content_mask_mean),
-                                        lambda: gram_matrix_var
+                content_mask_mean = tf.reduce_mean(input_tensor=content_seg)
+                gram_matrix_var   = tf.cond(pred=tf.greater(content_mask_mean, 0.),
+                                        true_fn=lambda: gram_matrix_var / (tf.cast(tf.size(input=var_layer), dtype=tf.float32) * content_mask_mean),
+                                        false_fn=lambda: gram_matrix_var
                                     )
 
-                diff_style_sum    = tf.reduce_mean(tf.squared_difference(gram_matrix_const, gram_matrix_var)) * content_mask_mean
+                diff_style_sum    = tf.reduce_mean(input_tensor=tf.math.squared_difference(gram_matrix_const, gram_matrix_var)) * content_mask_mean
 
                 layer_style_loss += diff_style_sum
 
@@ -157,8 +153,7 @@ def style_loss(CNN_structure, const_layers, var_layers, content_segs, style_segs
     return loss_styles
 
 def total_variation_loss(output, weight):
-    shape = output.get_shape()
-    tv_loss = tf.reduce_sum((output[:, :-1, :-1, :] - output[:, :-1, 1:, :]) * (output[:, :-1, :-1, :] - output[:, :-1, 1:, :]) + \
+    tv_loss = tf.reduce_sum(input_tensor=(output[:, :-1, :-1, :] - output[:, :-1, 1:, :]) * (output[:, :-1, :-1, :] - output[:, :-1, 1:, :]) + \
               (output[:, :-1, :-1, :] - output[:, 1:, :-1, :]) * (output[:, :-1, :-1, :] - output[:, 1:, :-1, :])) / 2.0
     return tv_loss * weight
 
@@ -166,8 +161,8 @@ def affine_loss(output, M, weight):
     loss_affine = 0.0
     output_t = output / 255.
     for Vc in tf.unstack(output_t, axis=-1):
-        Vc_ravel = tf.reshape(tf.transpose(Vc), [-1])
-        loss_affine += tf.matmul(tf.expand_dims(Vc_ravel, 0), tf.sparse_tensor_dense_matmul(M, tf.expand_dims(Vc_ravel, -1)))
+        Vc_ravel = tf.reshape(tf.transpose(a=Vc), [-1])
+        loss_affine += tf.matmul(tf.expand_dims(Vc_ravel, 0), tf.sparse.sparse_dense_matmul(M, tf.expand_dims(Vc_ravel, -1)))
 
     return loss_affine * weight
 
@@ -177,6 +172,7 @@ def save_result(img_, str_):
 
 iter_count = 0
 min_loss, best_image = float("inf"), None
+
 def print_loss(args, loss_content, loss_styles_list, loss_tv, loss_affine, overall_loss, output_image):
     global iter_count, min_loss, best_image
     if iter_count % args.print_iter == 0:
@@ -190,7 +186,7 @@ def print_loss(args, loss_content, loss_styles_list, loss_tv, loss_affine, overa
     if overall_loss < min_loss:
         min_loss, best_image = overall_loss, output_image
 
-    if iter_count % args.save_iter == 0 and iter_count != 0:
-        save_result(best_image[:, :, ::-1], os.path.join(args.serial, 'out_iter_{}.png'.format(iter_count)))
+    if iter_count % 100 == 0 and iter_count != 0:
+        save_result(best_image[:, :, ::-1], os.path.join('./', 'out_iter_{}.png'.format(iter_count)))
 
     iter_count += 1
