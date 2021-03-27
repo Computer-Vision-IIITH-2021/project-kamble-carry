@@ -155,3 +155,42 @@ def style_loss(CNN_structure, const_layers, var_layers, content_segs, style_segs
 
             loss_styles.append(layer_style_loss * weight)
     return loss_styles
+
+def total_variation_loss(output, weight):
+    shape = output.get_shape()
+    tv_loss = tf.reduce_sum((output[:, :-1, :-1, :] - output[:, :-1, 1:, :]) * (output[:, :-1, :-1, :] - output[:, :-1, 1:, :]) + \
+              (output[:, :-1, :-1, :] - output[:, 1:, :-1, :]) * (output[:, :-1, :-1, :] - output[:, 1:, :-1, :])) / 2.0
+    return tv_loss * weight
+
+def affine_loss(output, M, weight):
+    loss_affine = 0.0
+    output_t = output / 255.
+    for Vc in tf.unstack(output_t, axis=-1):
+        Vc_ravel = tf.reshape(tf.transpose(Vc), [-1])
+        loss_affine += tf.matmul(tf.expand_dims(Vc_ravel, 0), tf.sparse_tensor_dense_matmul(M, tf.expand_dims(Vc_ravel, -1)))
+
+    return loss_affine * weight
+
+def save_result(img_, str_):
+    result = Image.fromarray(np.uint8(np.clip(img_, 0, 255.0)))
+    result.save(str_)
+
+iter_count = 0
+min_loss, best_image = float("inf"), None
+def print_loss(args, loss_content, loss_styles_list, loss_tv, loss_affine, overall_loss, output_image):
+    global iter_count, min_loss, best_image
+    if iter_count % args.print_iter == 0:
+        print('Iteration {} / {}\n\tContent loss: {}'.format(iter_count, args.max_iter, loss_content))
+        for j, style_loss in enumerate(loss_styles_list):
+            print('\tStyle {} loss: {}'.format(j + 1, style_loss))
+        print('\tTV loss: {}'.format(loss_tv))
+        print('\tAffine loss: {}'.format(loss_affine))
+        print('\tTotal loss: {}'.format(overall_loss - loss_affine))
+
+    if overall_loss < min_loss:
+        min_loss, best_image = overall_loss, output_image
+
+    if iter_count % args.save_iter == 0 and iter_count != 0:
+        save_result(best_image[:, :, ::-1], os.path.join(args.serial, 'out_iter_{}.png'.format(iter_count)))
+
+    iter_count += 1
