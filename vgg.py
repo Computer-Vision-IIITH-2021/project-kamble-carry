@@ -38,3 +38,16 @@ class Vgg19:
 
         if clear_data:
             self.data_dict = None
+
+    def get_all_layers(self):
+        return [self.conv1_1, self.conv1_2, self.pool1,\
+                self.conv2_1, self.conv2_2, self.pool2, \
+                self.conv3_1, self.conv3_2, self.conv3_3, self.conv3_4, self.pool3, \
+                self.conv4_1, self.conv4_2, self.conv4_3, self.conv4_4, self.pool4, \
+                self.conv5_1]
+
+    def avg_pool(self, bottom, name):
+        return tf.nn.avg_pool2d(input=bottom, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME', name=name)
+
+    def max_pool(self, bottom, name):
+        return tf.nn.max_pool2d(input=bottom, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME', name=name)
