@@ -12,3 +12,29 @@ class Vgg19:
             path = os.path.join(path, "vgg19.npy")
             vgg19_npy_path = path
         self.data_dict = np.load(vgg19_npy_path, encoding='latin1', allow_pickle=True).item()
+
+    def build(self, bgr, clear_data=True):
+        self.conv1_1 = self.conv_layer(bgr, "conv1_1")
+        self.conv1_2 = self.conv_layer(self.conv1_1, "conv1_2")
+        self.pool1 = self.max_pool(self.conv1_2, 'pool1')
+
+        self.conv2_1 = self.conv_layer(self.pool1, "conv2_1")
+        self.conv2_2 = self.conv_layer(self.conv2_1, "conv2_2")
+        self.pool2 = self.max_pool(self.conv2_2, 'pool2')
+
+        self.conv3_1 = self.conv_layer(self.pool2, "conv3_1")
+        self.conv3_2 = self.conv_layer(self.conv3_1, "conv3_2")
+        self.conv3_3 = self.conv_layer(self.conv3_2, "conv3_3")
+        self.conv3_4 = self.conv_layer(self.conv3_3, "conv3_4")
+        self.pool3 = self.max_pool(self.conv3_4, 'pool3')
+
+        self.conv4_1 = self.conv_layer(self.pool3, "conv4_1")
+        self.conv4_2 = self.conv_layer(self.conv4_1, "conv4_2")
+        self.conv4_3 = self.conv_layer(self.conv4_2, "conv4_3")
+        self.conv4_4 = self.conv_layer(self.conv4_3, "conv4_4")
+        self.pool4 = self.max_pool(self.conv4_4, 'pool4')
+
+        self.conv5_1 = self.conv_layer(self.pool4, "conv5_1")
+
+        if clear_data:
+            self.data_dict = None
