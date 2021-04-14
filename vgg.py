@@ -51,3 +51,20 @@ class Vgg19:
 
     def max_pool(self, bottom, name):
         return tf.nn.max_pool2d(input=bottom, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME', name=name)
+
+    def conv_layer(self, bottom, name):
+        with tf.compat.v1.variable_scope(name):
+            filt = self.get_conv_filter(name)
+            conv = tf.nn.conv2d(input=bottom, filters=filt, strides=[1, 1, 1, 1], padding='SAME')
+
+            conv_biases = self.get_bias(name)
+            bias = tf.nn.bias_add(conv, conv_biases)
+
+            relu = tf.nn.relu(bias)
+            return relu
+
+    def get_conv_filter(self, name):
+        return tf.constant(self.data_dict[name][0], name="filter")
+
+    def get_bias(self, name):
+        return tf.constant(self.data_dict[name][1], name="biases")
