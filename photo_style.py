@@ -190,3 +190,54 @@ def print_loss(args, loss_content, loss_styles_list, loss_tv, loss_affine, overa
         save_result(best_image[:, :, ::-1], os.path.join('./', 'out_iter_{}.png'.format(iter_count)))
 
     iter_count += 1
+def stylize(args, Matting):
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth = True
+    sess = tf.Session(config=config)
+
+    start = time.time()
+    # prepare input images
+    content_image = np.array(Image.open(args.content_image_path).convert("RGB"), dtype=np.float32)
+    content_width, content_height = content_image.shape[1], content_image.shape[0]
+
+    if Matting:
+        M = tf.to_float(getLaplacian(content_image / 255.))
+
+    content_image = rgb2bgr(content_image)
+    content_image = content_image.reshape((1, content_height, content_width, 3)).astype(np.float32)
+
+    style_image = rgb2bgr(np.array(Image.open(args.style_image_path).convert("RGB"), dtype=np.float32))
+    style_width, style_height = style_image.shape[1], style_image.shape[0]
+    style_image = style_image.reshape((1, style_height, style_width, 3)).astype(np.float32)
+
+    content_masks, style_masks = load_seg(args.content_seg_path, args.style_seg_path, [content_width, content_height], [style_width, style_height])
+
+    if not args.init_image_path:
+        if Matting:
+            print("<WARNING>: Apply Matting with random init")
+        init_image = np.random.randn(1, content_height, content_width, 3).astype(np.float32) * 0.0001
+    else:
+        init_image = np.expand_dims(rgb2bgr(np.array(Image.open(args.init_image_path).convert("RGB"), dtype=np.float32)).astype(np.float32), 0)
+
+    mean_pixel = tf.constant(VGG_MEAN)
+    input_image = tf.Variable(init_image)
+
+    with tf.name_scope("constant"):
+        vgg_const = Vgg19()
+        vgg_const.build(tf.constant(content_image), clear_data=False)
+
+        content_fv = sess.run(vgg_const.conv4_2)
+        content_layer_const = tf.constant(content_fv)
+
+        vgg_const.build(tf.constant(style_image))
+        style_layers_const = [vgg_const.conv1_1, vgg_const.conv2_1, vgg_const.conv3_1, vgg_const.conv4_1, vgg_const.conv5_1]
+        style_fvs = sess.run(style_layers_const)
+        style_layers_const = [tf.constant(fv) for fv in style_fvs]
+
+    with tf.name_scope("variable"):
+        vgg_var = Vgg19()
+        vgg_var.build(input_image)
+
+    # which layers we want to use?
+    style_layers_var = [vgg_var.conv1_1, vgg_var.conv2_1, vgg_var.conv3_1, vgg_var.conv4_1, vgg_var.conv5_1]
+    content_layer_var = vgg_var.conv4_2
