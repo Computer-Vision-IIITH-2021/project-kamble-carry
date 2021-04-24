@@ -29,7 +29,6 @@ def bgr2rgb(bgr, vgg_mean=False):
 def load_seg(content_seg_path, style_seg_path, content_shape, style_shape):
     color_codes = ['BLUE', 'GREEN', 'BLACK', 'WHITE', 'RED', 'YELLOW', 'GREY', 'LIGHT_BLUE', 'PURPLE']
     def _extract_mask(seg, color_str):
-        h, w, c = np.shape(seg)
         if color_str == "BLUE":
             mask_r = (seg[:, :, 0] < 0.1).astype(np.uint8)
             mask_g = (seg[:, :, 1] < 0.1).astype(np.uint8)
@@ -97,9 +96,7 @@ def content_loss(const_layer, var_layer, weight):
 
 def style_loss(CNN_structure, const_layers, var_layers, content_segs, style_segs, weight):
     loss_styles = []
-    layer_count = float(len(const_layers))
     layer_index = 0
-
     _, content_seg_height, content_seg_width, _ = content_segs[0].get_shape().as_list()
     _, style_seg_height, style_seg_width, _ = style_segs[0].get_shape().as_list()
     for layer_name in CNN_structure:
@@ -191,17 +188,16 @@ def print_loss(args, loss_content, loss_styles_list, loss_tv, loss_affine, overa
 
     iter_count += 1
 def stylize(args, Matting):
-    config = tf.ConfigProto()
+    config = tf.compat.v1.ConfigProto()
     config.gpu_options.allow_growth = True
-    sess = tf.Session(config=config)
+    tf.compat.v1.disable_eager_execution()
+    sess = tf.compat.v1.Session(config=config)
 
-    start = time.time()
-    # prepare input images
     content_image = np.array(Image.open(args.content_image_path).convert("RGB"), dtype=np.float32)
     content_width, content_height = content_image.shape[1], content_image.shape[0]
 
     if Matting:
-        M = tf.to_float(getLaplacian(content_image / 255.))
+        M = tf.cast(getLaplacian(content_image / 255.), dtype=tf.float32)
 
     content_image = rgb2bgr(content_image)
     content_image = content_image.reshape((1, content_height, content_width, 3)).astype(np.float32)
@@ -222,7 +218,7 @@ def stylize(args, Matting):
     mean_pixel = tf.constant(VGG_MEAN)
     input_image = tf.Variable(init_image)
 
-    with tf.name_scope("constant"):
+    with tf.compat.v1.name_scope("constant"):
         vgg_const = Vgg19()
         vgg_const.build(tf.constant(content_image), clear_data=False)
 
@@ -234,10 +230,76 @@ def stylize(args, Matting):
         style_fvs = sess.run(style_layers_const)
         style_layers_const = [tf.constant(fv) for fv in style_fvs]
 
-    with tf.name_scope("variable"):
+    with tf.compat.v1.name_scope("variable"):
         vgg_var = Vgg19()
         vgg_var.build(input_image)
 
     # which layers we want to use?
     style_layers_var = [vgg_var.conv1_1, vgg_var.conv2_1, vgg_var.conv3_1, vgg_var.conv4_1, vgg_var.conv5_1]
     content_layer_var = vgg_var.conv4_2
+
+    # The whole CNN structure to downsample mask
+    layer_structure_all = [layer.name for layer in vgg_var.get_all_layers()]
+
+    # Content Loss
+    loss_content = content_loss(content_layer_const, content_layer_var, float(args.content_weight))
+
+    # Style Loss
+    loss_styles_list = style_loss(layer_structure_all, style_layers_const, style_layers_var, content_masks, style_masks, float(args.style_weight))
+    loss_style = 0.0
+    for loss in loss_styles_list:
+        loss_style += loss
+
+    input_image_plus = tf.squeeze(input_image + mean_pixel, [0])
+
+    # Affine Loss
+    if Matting:
+        loss_affine = affine_loss(input_image_plus, M, args.affine_weight)
+    else:
+        loss_affine = tf.constant(0.00001)  # junk value
+
+    # Total Variational Loss
+    loss_tv = total_variation_loss(input_image, float(args.tv_weight))
+
+    VGGNetLoss = loss_content + loss_tv + loss_style
+    optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=args.learning_rate, beta1=0.9, beta2=0.999, epsilon=1e-08)
+    VGG_grads = optimizer.compute_gradients(VGGNetLoss, [input_image])
+
+    if Matting:
+        b, g, r = tf.unstack(input_image_plus / 255., axis=-1)
+        b_gradient = tf.transpose(a=tf.reshape(2 * tf.sparse.sparse_dense_matmul(M, tf.expand_dims(tf.reshape(tf.transpose(a=b), [-1]), -1)), [content_width, content_height]))
+        g_gradient = tf.transpose(a=tf.reshape(2 * tf.sparse.sparse_dense_matmul(M, tf.expand_dims(tf.reshape(tf.transpose(a=g), [-1]), -1)), [content_width, content_height]))
+        r_gradient = tf.transpose(a=tf.reshape(2 * tf.sparse.sparse_dense_matmul(M, tf.expand_dims(tf.reshape(tf.transpose(a=r), [-1]), -1)), [content_width, content_height]))
+
+        Matting_grad = tf.expand_dims(tf.stack([b_gradient, g_gradient, r_gradient], axis=-1), 0) / 255. * args.affine_weight
+        VGGMatting_grad = [(VGG_grad[0] + Matting_grad, VGG_grad[1]) for VGG_grad in VGG_grads]
+
+        train_op = optimizer.apply_gradients(VGGMatting_grad)
+    else:
+        train_op = optimizer.apply_gradients(VGG_grads)
+
+    sess.run(tf.compat.v1.global_variables_initializer())
+    min_loss, best_image = float("inf"), None
+    for i in xrange(1, args.max_iter):
+        _, loss_content_, loss_styles_list_, loss_tv_, loss_affine_, overall_loss_, output_image_ = sess.run([
+            train_op, loss_content, loss_styles_list, loss_tv, loss_affine, VGGNetLoss, input_image_plus
+        ])
+        if i % args.print_iter == 0:
+            print('Iteration {} / {}\n\tContent loss: {}'.format(i, args.max_iter, loss_content_))
+            for j, style_loss_ in enumerate(loss_styles_list_):
+                print('\tStyle {} loss: {}'.format(j + 1, style_loss_))
+            print('\tTV loss: {}'.format(loss_tv_))
+            if Matting:
+                print('\tAffine loss: {}'.format(loss_affine_))
+            print('\tTotal loss: {}'.format(overall_loss_ - loss_tv_))
+
+        if overall_loss_ < min_loss:
+            min_loss, best_image = overall_loss_, output_image_
+
+        if i % 100 == 0 and i != 0:
+            save_result(best_image[:, :, ::-1], os.path.join('./', 'out_iter_{}.png'.format(i)))
+
+    return best_image
+
+if __name__ == "__main__":
+    stylize()
