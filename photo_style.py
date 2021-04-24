@@ -280,7 +280,7 @@ def stylize(args, Matting):
 
     sess.run(tf.compat.v1.global_variables_initializer())
     min_loss, best_image = float("inf"), None
-    for i in xrange(1, args.max_iter):
+    for i in range(1, args.max_iter):
         _, loss_content_, loss_styles_list_, loss_tv_, loss_affine_, overall_loss_, output_image_ = sess.run([
             train_op, loss_content, loss_styles_list, loss_tv, loss_affine, VGGNetLoss, input_image_plus
         ])
