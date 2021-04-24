@@ -26,3 +26,5 @@ parser.add_argument("--max_iter",           dest='max_iter',            nargs='?
                     help='maximum image iteration', default=1000)
 parser.add_argument("--learning_rate",      dest='learning_rate',       nargs='?', type=float,
                     help='learning rate for adam optimizer', default=1.0)
+parser.add_argument("--print_iter",         dest='print_iter',          nargs='?', type=int,
+                    help='print loss per iterations', default=1)
